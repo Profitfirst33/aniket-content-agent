@@ -1,0 +1,21 @@
+You control Google Flow (flow.google.com) in the already logged-in browser via the content-browser tools. Make {N} video clips with the user's avatar (Aniket), one after another, in the project "Nov 03 - 16:13" (open it from the Flow home page).
+
+Credits first: before generating anything, find the remaining Google Flow credits balance (shown in the account / profile menu or the top bar). Clips are paid from the Google Flow credits; ignore the separate small "AI credits" balance. If the balance is lower than {NEED}, do not generate anything and end your reply with the exact line `NO_CREDITS <balance>`. If you cannot find the balance, go on.
+
+Settings for EVERY clip:
+- Ingredient: + (Add ingredients) -> pick the IMAGE "aniket-avatar.jpg" (Aniket facing the camera, black t-shirt, grey curtains behind him). Never pick a video tile such as "Man posting first video": a video ingredient only repeats that video's own words. -> Add to prompt. Re-add it for each clip if the prompt box clears it. Check the bottom bar shows 8s before generating.
+- Video, Ingredients mode, model Omni 1.1 Flash, 9:16, 720p, 8s, x1.
+- If Omni 1.1 Flash is not offered, STOP and report. Never use Veo or any other model.
+- Read the credit cost before each generation. If a single clip costs more than 150 credits, STOP and report.
+- Generate each clip once. If one fails, retry it once; if it fails again, report and continue.
+
+Base prompt for every clip (replace <LINE> with the clip's line, keep everything else exactly):
+
+The exact same man from the reference image (Aniket): same face, same eyes, same short dark hair swept up with faded sides, same trimmed dark beard and moustache, plain black t-shirt. Same room as the reference image: white walls, grey curtains, a bright window and a grey mesh office chair behind him, soft natural daylight. Vertical 9:16 medium close-up at chest height, he looks straight into the camera and speaks confidently in a friendly, energetic Indian YouTuber tone, natural hand gestures, slight head movement, steady camera. He says {SPEAKS}: "<LINE>" No subtitles, no on-screen text, no music.
+
+Clips, in this order:
+{CLIPS}
+
+After EACH clip finishes: use the tile's ⋮ menu -> Download -> "720p Original size". Wait 10 seconds before starting the next clip so the downloads keep their order.
+
+Final report, under 12 lines: each clip's Flow title, credits, and whether the download was clicked. Total credits.

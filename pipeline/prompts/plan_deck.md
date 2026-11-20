@@ -1,0 +1,52 @@
+You edit a premium, screenshot-led reel (the nick_saraev way: the real page on screen, the exact line marked the moment it is spoken). Work in the current folder.
+
+Read first:
+- `script.json` (title, clips, keywords, cta_word, sources) and `request.txt`
+- `words.json`: every spoken word as [text, start, end]. Scenes and marks are timed by quoting these words.
+- `edit/work/duration.txt`: the reel length
+- `ref/transcript.txt` and `ref/frames.jpg` when they exist: the reference reel, mirror its visual beats
+- the docstring at the top of `/opt/aniket-content-agent/pipeline/deck_reel.py`: the deck.json schema. Follow it exactly.
+
+## 1. Capture the real pages (2-4 pages)
+Pick the pages the script talks about: the GitHub repo, the official blog / announcement, docs, the product site (from script.json sources, request.txt, or a WebSearch for the official page). Capture each:
+`node /opt/aniket-content-agent/pipeline/grab.mjs <url> <short_name>`
+Then Read `edit/assets/img/<short_name>.jpg` to see it, and the `lines` in `edit/assets/img/<short_name>.json` to see which text is on it and where (css px, page is 1280 wide). Drop a capture that shows a login wall, an error, a captcha or a cookie wall.
+For every line you will mark, run grab again with the exact on-page text, all of a page's phrases in one call:
+`node /opt/aniket-content-agent/pipeline/grab.mjs <url> <short_name> --find "100 billion|Google Sheets|BigQuery"`
+It prints how many were found; marks may only use phrases it found.
+
+## 1b. Collect real images
+Look for 1-2 real images that show the thing itself: a product shot, an app screen, a diagram or a chart from the official site or article, not a generic stock photo and not a logo.
+`python3 /opt/aniket-content-agent/pipeline/media.py og <page_url> <short_name>` takes the page's share image; `python3 /opt/aniket-content-agent/pipeline/media.py image <image_url> <short_name>` takes one image file. Read each jpg and drop any that is plain text, blurry, off-topic or looks like an ad. If none is good, use none.
+
+## 1c. Collect B-roll clips (2-4)
+For spoken moments that have no page or image to show (an example, a story, a result, a feeling, "imagine..."), find a short stock video that shows exactly what is said.
+`python3 /opt/aniket-content-agent/pipeline/media.py broll <word> <word>` searches free Mixkit clips, one single English word per search (e.g. `cyberpunk`, `robot`, `coding`, `brain`, `money`, `fossil`); try 2-4 words per moment.
+Pick the clip whose title matches the spoken words best, then `python3 /opt/aniket-content-agent/pipeline/media.py broll-get <id> <short_name>` and Read `edit/assets/broll/<short_name>.jpg`. Drop a clip that is off-topic, has people's faces as the main subject, text, logos of other brands, or looks cheap. A close enough match is fine; a wrong one is worse than none. Never use clips from anywhere else.
+
+## 2. Choose the template from the screenshots
+Look at the captured screenshots (their layout, colours, how much text) and the topic, then pick ONE:
+- `paper`: cream paper, tilted polaroid cards, red hand-drawn circles, marker-yellow highlights. Best for text-heavy pages: research blogs, news articles, announcements, GitHub READMEs, open-source repos. The default.
+- `clean`: white studio, soft floating cards, electric-blue glow boxes. Best for product UIs: SaaS sites, apps, dashboards, pricing pages, dark-mode screenshots, polished landing pages.
+- `notebook`: ruled notebook paper, blue pen, rounded font. Best for teaching: tutorials, step-by-step guides, "3 tools / 5 tips" lists, docs with numbered steps or code snippets.
+- `lime`: grey studio, black heads with a lime italic box, lime-glow cards, lime stat cards. Best for AI tools, Claude / ChatGPT / agents, automations, terminal-heavy demos, "this new AI tool" launches.
+Recently used templates (newest first): {RECENT}. Do not pick the same template as the last two reels unless nothing else fits.
+Write the choice in `template` and one short line in `reason` that names what in the screenshots decided it (e.g. "research blog + GitHub README, text-heavy pages").
+
+## 3. Plan the scenes and write deck.json
+- 8-12 scenes covering the whole reel. Scene 1 starts at 0 (no `at`); every later scene's `at` quotes the 1-3 spoken words that begin its idea, copied exactly from words.json (a name spoken as two words stays two words, e.g. "Times FM"). Every scene lasts at least 1.2 s.
+- Scene 1 is the hook: kind card with the strongest page and a title (kicker 1-3 words in caps, text 3-6 words from the hook headline, em = its punchline words).
+- At least a third of the scenes are card scenes with real pages, and most cards have a mark that lands on the line being said at that moment (`at` of the mark = the spoken words). Use `marker` for a line of text, `circle` for a name, number, button or heading. A new topic or "first / second / step 2" gets `section: true` and a short title.
+- 2-4 `broll` scenes (from step 1c) on the moments the clip shows, mostly where a face scene would otherwise run long without anything to see; give each a short title (kicker + 3-6 words) and at most one sticker or stat. Never a broll for something a real page or image already shows.
+- 1-2 face scenes give the eye a rest (opinions, "normally...", feelings); give them 1-3 stickers of 1-4 words timed on the spoken word.
+- Use `face: "hidden"` (big card over the backdrop) for at most 3 card scenes, usually the ones with a stat.
+- Variety, so it never feels like the same card again: never more than 2 card scenes in a row (a broll scene breaks a run of cards). Whenever brands or platforms are named, show their real logos on the spoken word: one `logos` scene when 2 or more are named together in a card moment, or `logo` on face stickers (e.g. {"text": "YouTube", "logo": "youtube", "at": "YouTube"}). Use each real image from step 1b in an `image` scene at the moment it is talked about. Use a real brand's logo only when that brand is actually spoken.
+- Cards push in on a mark automatically, so one mark per card reads best; pick a short phrase that is readable when enlarged.
+- A stat only for a number that is actually spoken and printed on the page or in the script (100B+ data points, 35K stars). Never invent numbers, quotes or features.
+- A terminal only when the script talks about installing, running or typing commands; lines must be true to the tool.
+- No two consecutive scenes may show the same page at the same spot: move to another line or another page.
+- Last scene: kind cta, at "Comment <WORD>" (as spoken), word = script.cta_word.
+- keywords: script.keywords plus the cta word, lowercase.
+
+## 4. Validate
+Run `python3 /opt/aniket-content-agent/pipeline/deck_reel.py . --check`. If it prints spec errors, fix deck.json and run it again until it prints "built". Reply with one line: template, number of scenes.

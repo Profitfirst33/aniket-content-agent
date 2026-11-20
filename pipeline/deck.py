@@ -1,0 +1,717 @@
+"""Style deck: one reel spec, many looks. The VPS pipeline uses it through deck_reel.py (templates paper, clean, notebook, lime).
+
+A style decides the background, colours, fonts, card frame, how things enter and leave,
+how captions look, how a key line is marked, and which fun extras play. A reel spec only
+says what is shown when (pages, marks, numbers, titles); `Deck` draws it in the chosen style.
+"""
+import html, json, os, re
+
+E = html.escape
+W, H = 1080, 1920
+
+STYLES = {
+    # deep green mesh, gold numbers, condensed caps, zoom cuts with white flashes
+    "cinema": dict(
+        name="Green Cinematic", bg="mesh", light=False,
+        base1="#03110B", base2="#0A2618", glow1="rgba(30,140,80,.55)", glow2="rgba(201,162,39,.35)", glow3="rgba(10,90,60,.6)",
+        accent="#3DDC84", accent2="#F5C542", ink="#FFFFFF", muted="#A9CDB9",
+        head="'League Gothic'", head_size=150, head_ls="1px", head_case="uppercase", kicker="'Oswald'",
+        cap="'League Gothic'", cap_w=400, cap_size=(118, 132, 120), cap_case="uppercase", cap_ls="1px",
+        cap_mode="pop", kw_col="#F5C542",
+        card="glass", trans="zoom", section="flash", mark="glow", stat="roll",
+        chair_bg="linear-gradient(180deg,rgba(20,60,40,.85),rgba(6,24,16,.95))", chair_border="2px solid rgba(61,220,132,.45)",
+        alt_tint="rgba(2,22,12,.55)", grain=.08, progress=False),
+    # cream paper, black ink, tomato + marker yellow, serif italics, tilted polaroids, hand-drawn circles
+    "paper": dict(
+        name="Editorial Paper", bg="paper", light=True,
+        base1="#F4EDDF", base2="#EADFCB", accent="#FF4A1C", accent2="#FFE14D", ink="#141414", muted="#6B6255",
+        head="'EB Garamond'", head_size=124, head_ls="-2px", head_case="none", kicker="'Inter'",
+        cap="'Inter'", cap_w=900, cap_size=(78, 98, 88), cap_case="none", cap_ls="-1.5px",
+        cap_mode="marker", kw_col="#141414",
+        card="polaroid", trans="drop", section="wipe", mark="circle", stat="sticker",
+        chair_bg="#E2D5BC", chair_border="none",
+        alt_color="#FF4A1C", grain=.13, progress=False),
+    # yellow halftone, black ink, red circles, brutalist cards with hard shadows, chunky caps
+    "pop": dict(
+        name="Bold Pop", fam="paper", bg="paper", pattern="halftone", light=True,
+        base1="#FFD60A", base2="#FFC300", accent="#FF2E2E", accent2="#7CF5FF", ink="#111111", muted="#4a3d00",
+        head="'Archivo Black'", head_w="400", head_size=104, head_ls="-2px", head_case="uppercase", em_style="normal", kicker="'Inter'",
+        cap="'Archivo Black'", cap_w=400, cap_size=(70, 88, 80), cap_case="uppercase", cap_ls="-1px",
+        cap_mode="marker", kw_col="#111", marker="#7CF5FF", kw_font="'Archivo Black'", kw_style="normal", kw_w=400, kw_scale=1.0,
+        num_font="normal 400", cta_size=150,
+        card="brutal", trans="drop", section="wipe", mark="circle", stat="sticker",
+        chair_bg="#111111", chair_border="none", alt_color="#111111", doodle2="#111111", sticker_bg="#111111",
+        grain=.07, progress=False),
+    # clean white studio, one electric blue, bold Inter, soft floating cards, blue glow marks
+    "clean": dict(
+        name="Clean Tech", fam="cinema", bg="mesh", light=True, vignette=0,
+        base1="#F8F9FB", base2="#E7ECF3", glow1="rgba(10,132,255,.22)", glow2="rgba(140,110,255,.16)", glow3="rgba(10,132,255,.14)",
+        accent="#0A84FF", accent2="#0A84FF", ink="#111111", muted="#6B7280",
+        head="'Inter'", head_w="900", head_size=100, head_ls="-4px", head_case="none", em_col="#0A84FF", kicker="'Inter'",
+        cap="'Inter'", cap_w=900, cap_size=(76, 94, 86), cap_case="none", cap_ls="-2px",
+        cap_mode="pop", kw_col="#0A84FF",
+        card="soft", trans="zoom", section="wipe", mark="glow", stat="roll",
+        stat_bg="rgba(255,255,255,.96)", stat_num="#0A84FF", stat_label="#333", stat_size=130, term_bg="#101216",
+        chip="font:900 26px/1 Inter;background:#0A84FF;color:#fff;border-radius:999px",
+        chair_bg="linear-gradient(180deg,#DCE2EA,#C8D0DA)", chair_border="none",
+        alt_tint="rgba(12,22,40,.45)", grain=.03, progress=False, cta_col="#FFFFFF", cta_size=165),
+    # plum night with coral + peach glow, rounded Poppins, karaoke pills, warm glass cards
+    "sunset": dict(
+        name="Sunset Glow", fam="cinema", bg="mesh", light=False,
+        base1="#1A0B2E", base2="#2D0F3F", glow1="rgba(255,94,98,.55)", glow2="rgba(255,163,102,.45)", glow3="rgba(170,60,210,.5)",
+        accent="#FF5E62", accent2="#FFC371", ink="#FFFFFF", muted="#FFD9C2",
+        head="'Poppins'", head_w="900", head_size=104, head_ls="-3px", head_case="none", kicker="'Poppins'",
+        cap="'Poppins'", cap_w=900, cap_size=(74, 92, 84), cap_case="none", cap_ls="-1.5px",
+        cap_mode="karaoke", kw_col="#FFC371",
+        card="glass", card_bg="#1d0f2a", chrome=("#27122f", "#ffd9c2", "#371a42"), trans="zoom", section="flash", mark="glow", stat="roll",
+        stat_bg="rgba(32,10,44,.92)", stat_size=130, term_bg="#160a20",
+        chair_bg="linear-gradient(180deg,rgba(90,30,80,.85),rgba(30,10,40,.95))", chair_border="2px solid rgba(255,94,98,.5)",
+        alt_tint="rgba(40,8,44,.5)", grain=.07, progress=False, cta_size=165),
+    # black terminal, matrix green, monospace everything, glitch cuts, scan grid
+    "hacker": dict(
+        name="Terminal Hacker", fam="neon", bg="grid", light=False,
+        base1="#020604", base2="#04110A", glow1="rgba(0,255,136,.30)", glow2="rgba(0,190,100,.25)", glow3="rgba(0,120,60,.4)",
+        accent="#00FF88", accent2="#00FF88", ink="#E6FFF2", muted="#7CC9A0",
+        head="'JetBrains Mono'", head_w="700", head_size=84, head_ls="-2px", head_case="none", kicker="'Space Mono'",
+        cap="'JetBrains Mono'", cap_w=700, cap_size=(64, 82, 74), cap_case="none", cap_ls="-1px",
+        cap_mode="pop", kw_col="#00FF88",
+        card="neon", chrome=("#06140c", "#7CF5B0", "#0b1f14"), trans="glitch", section="glitch", mark="bracket", stat="mono",
+        stat_bg="rgba(2,12,6,.92)", term_bg="#020a05",
+        chair_bg="linear-gradient(180deg,#06140c,#020604)", chair_border="2px solid rgba(0,255,136,.5)",
+        alt_tint="rgba(0,18,8,.62)", grain=.06, progress=True),
+    # school notebook: ruled lines + red margin, blue pen, rounded Nunito, marker + circles
+    "notebook": dict(
+        name="Notebook", fam="paper", bg="paper", pattern="lines", light=True,
+        base1="#FCFCF8", base2="#F2F2EA", accent="#1F5BFF", accent2="#FFE14D", ink="#13213F", muted="#5A6785",
+        head="'Nunito'", head_w="900", head_size=110, head_ls="-2px", head_case="none", em_style="normal", kicker="'Nunito'",
+        cap="'Nunito'", cap_w=900, cap_size=(80, 98, 88), cap_case="none", cap_ls="-1px",
+        cap_mode="marker", kw_col="#13213F", kw_font="'Nunito'", kw_style="normal", kw_w=900, kw_scale=1.05, num_font="normal 900",
+        card="polaroid", trans="drop", section="wipe", mark="circle", stat="sticker",
+        chair_bg="#E3E6EE", chair_border="none", alt_color="#1F5BFF", doodle2="#FF4A1C",
+        grain=.07, progress=False),
+    # near-black with a moving perspective grid, purple + cyan glow, mono labels, glitch cuts, karaoke captions
+    "neon": dict(
+        name="Neon Grid", bg="grid", light=False,
+        base1="#07060F", base2="#0E0B22", glow1="rgba(140,80,255,.55)", glow2="rgba(34,211,238,.35)", glow3="rgba(90,40,200,.5)",
+        accent="#A78BFA", accent2="#22D3EE", ink="#FFFFFF", muted="#B7B0E0",
+        head="'Montserrat'", head_size=104, head_ls="-3px", head_case="uppercase", kicker="'Space Mono'",
+        cap="'Montserrat'", cap_w=900, cap_size=(74, 92, 84), cap_case="none", cap_ls="-1.5px",
+        cap_mode="karaoke", kw_col="#22D3EE",
+        card="neon", trans="glitch", section="glitch", mark="bracket", stat="mono",
+        chair_bg="linear-gradient(180deg,#15112E,#0A0818)", chair_border="2px solid rgba(167,139,250,.6)",
+        alt_tint="rgba(14,6,34,.6)", grain=.06, progress=True),
+    # the Telegram look made premium: soft grey studio, palm leaves, black Inter heads with a lime italic box, lime-glow cards
+    "lime": dict(
+        name="Lime", fam="cinema", bg="lime", light=True, vignette=0,
+        base1="#F2F2F0", base2="#E2E2DF", accent="#9DBF00", accent2="#D9F23E", ink="#0E0E0E", muted="#5E5E5A",
+        head="'Inter'", head_w="900", head_size=96, head_ls="-2px", head_case="none", kicker="'Inter'",
+        em_box="font-family:'Playfair Display';font-style:italic;font-weight:800;background:#D9F23E;color:#0E0E0E;"
+               "padding:0 .22em .1em;border-radius:8px;box-shadow:0 10px 30px rgba(140,170,20,.25)",
+        cap="'Inter'", cap_w=900, cap_size=(76, 94, 86), cap_case="none", cap_ls="-1.5px",
+        cap_mode="marker", kw_col="#0E0E0E", marker="#D9F23E", kw_font="'Playfair Display'", kw_style="italic", kw_w=800, kw_scale=1.1,
+        card="lime", trans="zoom", section="wipe", mark="glow", stat="roll",
+        stat_bg="#0E0E0E", stat_num="#D9F23E", stat_label="#FFFFFF", stat_size=130, term_bg="#0E0E0E",
+        chip="font:900 26px/1 Inter;background:#D9F23E;color:#0E0E0E;border-radius:8px",
+        sticker_bg="#D9F23E", sticker_ink="#0E0E0E",
+        chair_bg="linear-gradient(180deg,#D8D8D4,#C9C9C4)", chair_border="none",
+        alt_tint="rgba(14,14,14,.5)", grain=.03, progress=False,
+        cta_big="font:italic 800 {size}px/1 'Playfair Display';color:#0E0E0E;background:#D9F23E;padding:0 44px 22px;border-radius:12px;"
+                "display:inline-block;box-shadow:0 20px 60px rgba(0,0,0,.35)",
+        cta_small="font:900 46px/1 Inter;letter-spacing:10px;color:#fff;text-shadow:0 4px 20px rgba(0,0,0,.6)"),
+}
+
+# full-width clip with its studio background. LAYOUT (set by deck_reel.py per reel): 1 = blurred studio behind the card,
+# 2 = template background behind the card with a straight top edge
+LAYOUT = int(os.environ.get("LAYOUT", "1"))
+CARD_Y, CARD_S = {1: (662, .85), 2: (669, 1.0)}[LAYOUT]
+FULL_Y, FULL_S, CHAIR_TOP = 0, 1.0, 1330
+MASK = {1: "linear-gradient(90deg,transparent,#000 7%,#000 93%,transparent),linear-gradient(180deg,transparent 7%,#000 13%)",
+        2: "linear-gradient(180deg,transparent 11%,#000 11%)"}[LAYOUT]
+
+
+GARAMOND = "'EB Garamond'"
+PATTERNS = {
+    "dots": "background-image:radial-gradient(rgba(20,20,20,.13) 1.6px,transparent 1.8px);background-size:36px 36px",
+    "lines": "background-image:linear-gradient(90deg,transparent 118px,rgba(230,60,60,.55) 118px,rgba(230,60,60,.55) 121px,transparent 121px),"
+             "linear-gradient(rgba(60,110,220,.22) 2px,transparent 2px);background-size:100% 100%,100% 58px",
+    "halftone": "background-image:radial-gradient(rgba(0,0,0,.16) 3px,transparent 3.4px);background-size:22px 22px",
+    "none": "",
+}
+
+
+def rgb(h):
+    h = h.lstrip("#")
+    return ",".join(str(int(h[i:i + 2], 16)) for i in (0, 2, 4))
+
+
+class Deck:
+    def __init__(self, out, dur, style, words):
+        self.out, self.dur, self.s, self.key = out, dur, STYLES[style], style
+        self.fam = self.s.get("fam", style)  # which family of motion / layout rules the look builds on
+        self.words = words
+        self.scenes, self.sfx, self.alts, self.sections = [], [], [], []
+        os.makedirs(f"{out}/compositions", exist_ok=True)
+
+    # ------------------------------------------------------------ timing
+    def T(self, phrase, n=0):
+        """Start time of the n-th occurrence of a phrase in the spoken words."""
+        want = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in phrase.split()]
+        got = [re.sub(r"[^a-z0-9]", "", w[0].lower()) for w in self.words]
+        hits = [i for i in range(len(got) - len(want) + 1)
+                if all(got[i + k].startswith(w) for k, w in enumerate(want))]  # "200" matches "200-plus"
+        if len(hits) <= n:
+            raise KeyError(f"phrase not spoken: {phrase!r}")
+        return self.words[hits[n]][1]
+
+    def fx(self, name, at, vol=.3, dur=.9):
+        self.sfx.append((name, round(at, 2), vol, dur))
+
+    # ------------------------------------------------------------ scene
+    def scene(self, sid, start, end, face, body, js, alt=None, section=False):
+        """face: card | full | hidden. alt: image for a blurred backdrop (or a colour block in paper)."""
+        self.scenes.append(dict(id=sid, start=start, end=end, face=face))
+        if alt:
+            self.alts.append((sid, start, end, alt))
+        if section:
+            self.sections.append(start)
+        s = self.s
+        ink = s["ink"] if not (alt and self.fam == "paper") else "#FFFFFF"
+        if LAYOUT == 1:  # titles sit on the dark blurred studio
+            ink = "#FFFFFF"
+        doc = f"""<template>
+<style>
+#root{{position:absolute;inset:0;overflow:hidden;font-family:Inter,sans-serif;color:{ink}}}
+{self.css()}
+{".head em,.head .ebox{color:" + s["accent2"] + "} .kick{color:rgba(255,255,255,.85)}" if alt and self.fam == "paper" else ""}
+</style>
+<div id="root" data-composition-id="{sid}" data-width="{W}" data-height="{H}">
+<div id="{sid}-wrap" style="position:absolute;inset:0" data-layout-allow-overlap data-layout-allow-overflow>
+{body}
+</div>
+</div>
+<script>
+const tl = gsap.timeline({{ paused: true }});
+{chr(10).join(js)}
+window.__timelines["{sid}"] = tl;
+</script>
+</template>
+"""
+        open(f"{self.out}/compositions/{sid}.html", "w").write(doc)
+
+    # ------------------------------------------------------------ css per style
+    def css(self):
+        s, a, a2 = self.s, self.s["accent"], self.s["accent2"]
+        ar, ar2 = rgb(a), rgb(a2)
+        card = {
+            "glass": f"border-radius:28px;background:{s.get('card_bg', '#0d1712')};border:2px solid rgba({ar},.55);"
+                     f"box-shadow:0 0 0 1px rgba(255,255,255,.05),0 0 60px rgba({ar},.25),0 40px 90px rgba(0,0,0,.6)",
+            "brutal": "border-radius:10px;background:#fff;border:6px solid #111;box-shadow:16px 16px 0 #111",
+            "soft": f"border-radius:30px;background:#fff;border:1px solid rgba(0,0,0,.06);"
+                    f"box-shadow:0 2px 6px rgba(0,0,0,.05),0 30px 70px rgba({ar},.22)",
+            "polaroid": "border-radius:6px;background:#fff;border:14px solid #fff;border-bottom-width:22px;"
+                        "box-shadow:0 2px 0 rgba(0,0,0,.06),0 26px 50px rgba(60,40,10,.28)",
+            "neon": f"border-radius:18px;background:#0d0b1a;border:2px solid {a2};"
+                    f"box-shadow:0 0 0 1px rgba({ar},.4),0 0 36px rgba({ar2},.45),0 0 90px rgba({ar},.35)",
+            "lime": f"border-radius:30px;background:#fff;border:6px solid {a2};"
+                    f"box-shadow:0 0 0 2px rgba({ar2},.35),0 0 46px rgba({ar2},.45),0 28px 70px rgba(0,0,0,.28)",
+        }[s["card"]]
+        chrome = s.get("chrome") or {"glass": ("#0f1f17", "#cfe9da", "#18291f"), "polaroid": ("#F1EEE8", "#3b3b3b", "#ffffff"),
+                                     "neon": ("#120f26", "#c9c2ff", "#1b1735"), "brutal": ("#FFD60A", "#111", "#fff"),
+                                     "soft": ("#F5F6F8", "#555", "#ffffff"), "lime": ("#F3F3F1", "#444", "#ffffff")}[s["card"]]
+        chip = {"cinema": f"font:900 26px/1 Inter;background:{a};color:#04140c;border-radius:10px",
+                "paper": "font:900 26px/1 Inter;background:#141414;color:#fff;border-radius:4px",
+                "neon": f"font:700 26px/1 'Space Mono';background:rgba(13,11,26,.9);color:{a2};border:2px solid {a2};border-radius:6px"}[self.fam]
+        chip = s.get("chip", chip)
+        return f"""
+.hl{{position:absolute;left:0;right:0;text-align:center}}
+.kick{{font:700 34px/1 {s['kicker']};letter-spacing:6px;text-transform:uppercase;color:{s['muted']}}}
+.head{{font-family:{s['head']};font-size:{s['head_size']}px;line-height:.98;letter-spacing:{s['head_ls']};text-transform:{s['head_case']};font-weight:{s.get('head_w', '500' if self.fam == 'paper' else '400' if self.fam == 'cinema' else '900')}}}
+.head em{{font-style:{s.get('em_style', 'italic' if self.fam == 'paper' else 'normal')};color:{s.get('em_col', a if self.fam != 'cinema' else a2)}}}
+.head .ebox{{display:inline-block;{s.get('em_box', '')}}}
+.w{{display:inline-block;margin:0 .12em}}
+.card{{position:absolute;overflow:hidden;{card}}}
+.chrome{{position:absolute;left:0;right:0;top:0;height:52px;background:{chrome[0]};display:flex;align-items:center;
+  padding:0 20px;gap:10px;z-index:3}}
+.dot{{width:14px;height:14px;border-radius:50%}}
+.url{{flex:1;margin:0 40px;height:32px;border-radius:16px;background:{chrome[2]};
+  font:700 19px/32px {s.get('mono_url', "'Space Mono'" if self.fam == 'neon' else 'Inter')};color:{chrome[1]};text-align:center;white-space:nowrap;overflow:hidden}}
+.shot{{position:absolute;left:0;top:52px;max-width:none}}
+.chip{{position:absolute;z-index:6;padding:12px 18px;letter-spacing:1px;{chip}}}
+.mark{{position:absolute;z-index:4;pointer-events:none}}
+.glowbox{{border:4px solid {a};border-radius:14px;background:rgba({ar},.12);box-shadow:0 0 30px rgba({ar},.55)}}
+.bracket{{border:0;background:rgba({ar2},.10)}}
+.bracket i{{position:absolute;width:30px;height:30px;border:5px solid {a2}}}
+.marker{{background:{s.get('marker', a2)};mix-blend-mode:multiply;border-radius:4px;transform-origin:0 50%}}
+.term{{position:absolute;overflow:hidden;border-radius:{'6px' if self.fam == 'paper' else '20px'};background:{s.get('term_bg', '#161616' if self.fam == 'paper' else '#0b0f0d' if self.fam == 'cinema' else '#0b0918')};
+  {s.get('term_frame', 'border:14px solid #fff;box-shadow:0 26px 50px rgba(60,40,10,.28)' if self.fam == 'paper' else card.split(';background')[0] + ';' + card.split(';', 2)[2])}}}
+.term pre{{position:absolute;left:34px;top:84px;right:30px;font:500 31px/1.5 'JetBrains Mono';color:#e8e8e8;white-space:pre-wrap}}
+.term .p{{color:{a if self.fam != 'paper' else '#FF8A5C'}}}
+.stat{{position:absolute;z-index:7;text-align:center}}
+.cta{{position:absolute;left:0;right:0;text-align:center}}
+.sticker{{position:absolute;z-index:8;font:900 40px/1 Inter;padding:14px 22px;border-radius:999px;background:{s.get('sticker_bg', a)};color:{s.get('sticker_ink', '#fff')};box-shadow:0 10px 24px rgba(0,0,0,.2)}}
+.ltile{{position:absolute;z-index:8;border-radius:34px;background:#fff;border:3px solid {s.get('sticker_bg', a)};box-shadow:0 18px 44px rgba(0,0,0,.22);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px}}
+.ltile img{{object-fit:contain}}
+.ltile b{{font:800 34px/1.05 Inter;color:#111;text-align:center;padding:0 10px}}
+.cursor{{position:absolute;z-index:9;width:46px;height:46px}}
+.ripple{{position:absolute;z-index:8;width:90px;height:90px;border-radius:50%;border:4px solid {a};opacity:0}}
+"""
+
+    # ------------------------------------------------------------ widgets
+    def title(self, sid, kicker, main, y=150, at=0.0, em=None):
+        """Section / hook title. `em` = words of `main` drawn in the accent."""
+        s = self.s
+        em = set((em or "").split())
+        if s.get("em_box"):  # consecutive accent words share one box, which animates as one word
+            words = []
+            for w in main.split():
+                if w in em and words and words[-1][1]:
+                    words[-1][0] += " " + w
+                else:
+                    words.append([w, w in em])
+            spans = " ".join(f'<span class="w{" ebox" if box else ""}" id="{sid}-t{i}">{E(w)}</span>' for i, (w, box) in enumerate(words))
+        else:
+            words = main.split()
+            spans = " ".join(f'<span class="w" id="{sid}-t{i}">{"<em>" + E(w) + "</em>" if w in em else E(w)}</span>'
+                             for i, w in enumerate(words))
+        body = ""
+        if kicker:
+            body += f'<div class="hl kick" id="{sid}-k" style="top:{y}px">{E(kicker)}</div>'
+        body += f'<div class="hl head" style="top:{y + (56 if kicker else 0)}px;padding:0 50px">{spans}</div>'
+        js = []
+        if kicker:
+            js.append(f'tl.fromTo("#{sid}-k",{{opacity:0,y:-14,scaleX:1.35}},{{opacity:1,y:0,scaleX:1,duration:.45,ease:"power3.out"}},{at:.2f});')
+        for i in range(len(words)):
+            t = at + .08 + i * .09
+            if self.fam == "cinema":
+                js.append(f'tl.fromTo("#{sid}-t{i}",{{opacity:0,scale:1.6,filter:"blur(12px)"}},{{opacity:1,scale:1,filter:"blur(0px)",duration:.35,ease:"expo.out"}},{t:.2f});')
+            elif self.fam == "paper":
+                js.append(f'tl.fromTo("#{sid}-t{i}",{{opacity:0,y:40,rotation:-6}},{{opacity:1,y:0,rotation:0,duration:.45,ease:"back.out(1.8)"}},{t:.2f});')
+            else:
+                js.append(f'tl.fromTo("#{sid}-t{i}",{{opacity:0,x:-30,skewX:20}},{{opacity:1,x:0,skewX:0,duration:.28,ease:"power4.out"}},{t:.2f});')
+                js.append(f'tl.fromTo("#{sid}-t{i}",{{textShadow:"-6px 0 #ff2bd6, 6px 0 #22D3EE"}},{{textShadow:"0px 0 #ff2bd6, 0px 0 #22D3EE",duration:.3,ease:"power2.out"}},{t + .05:.2f});')
+        return body, js
+
+    def leave(self, sel, at):
+        s = self.s
+        if s["trans"] == "zoom":
+            return f'tl.to("{sel}",{{scale:.86,opacity:0,filter:"blur(10px)",duration:.24,ease:"power2.in"}},{at:.2f});'
+        if s["trans"] == "drop":
+            return f'tl.to("{sel}",{{y:-140,opacity:0,duration:.26,ease:"power2.in"}},{at:.2f});'
+        return f'tl.to("{sel}",{{x:90,skewX:-14,opacity:0,duration:.2,ease:"power3.in"}},{at:.2f});'
+
+    def enter(self, sel, at, tilt=0.0):
+        s = self.s
+        if s["trans"] == "zoom":
+            return (f'tl.fromTo("{sel}",{{scale:1.22,opacity:0,filter:"blur(14px)"}},'
+                    f'{{scale:1,opacity:1,filter:"blur(0px)",duration:.45,ease:"expo.out"}},{at:.2f});')
+        if s["trans"] == "drop":
+            return (f'tl.fromTo("{sel}",{{y:260,rotation:{tilt + 7},opacity:0}},'
+                    f'{{y:0,rotation:{tilt},opacity:1,duration:.55,ease:"back.out(1.4)"}},{at:.2f});')
+        return (f'tl.fromTo("{sel}",{{x:-90,skewX:14,opacity:0}},{{x:0,skewX:0,opacity:1,duration:.3,ease:"power4.out"}},{at:.2f});'
+                f'tl.fromTo("{sel}",{{filter:"drop-shadow(-10px 0 0 #ff2bd6) drop-shadow(10px 0 0 #22D3EE)"}},'
+                f'{{filter:"drop-shadow(0px 0 0 rgba(0,0,0,0)) drop-shadow(0px 0 0 rgba(0,0,0,0))",duration:.36,ease:"power2.out"}},{at + .04:.2f});')
+
+    def card(self, sid, x, y, w, h, url, img, extra="", view=(0, 1280)):
+        """Browser card; the screenshot is 2560 px wide (1280 css px). `view` = the css-px column range shown
+        across the card, so (900, 1280) zooms into the right-hand third."""
+        sc = w / (view[1] - view[0])
+        dots = "".join(f'<span class="dot" style="background:{c}"></span>' for c in ("#FF5F57", "#FEBC2E", "#28C840"))
+        tape = ""
+        if self.s["card"] == "polaroid":
+            tape = (f'<div id="{sid}-tape" style="position:absolute;left:{x + w / 2 - 90}px;top:{y - 26}px;width:180px;height:46px;z-index:7;'
+                    f'background:rgba(255,225,77,.75);box-shadow:0 2px 6px rgba(0,0,0,.08)"></div>')
+        return (f'<div class="card" id="{sid}-card" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px">'
+                f'<div class="chrome">{dots}<div class="url">{E(url)}</div></div>'
+                f'<div id="{sid}-pan" style="position:absolute;left:0;top:0;width:{w}px">'
+                f'<img class="shot" id="{sid}-img" src="assets/img/{img}" style="left:{-view[0] * sc:.1f}px;width:{1280 * sc:.1f}px">{extra}</div></div>{tape}')
+
+    def pan(self, sid, frm, to, at, dur):
+        """Scroll the screenshot: frm/to are y offsets in screenshot css px (1280 wide)."""
+        return f'tl.fromTo("#{sid}-pan",{{y:-{frm}*SC_{sid}}},{{y:-{to}*SC_{sid},duration:{dur:.2f},ease:"power2.inOut"}},{at:.2f});'
+
+    def mark(self, mid, x, y, w, h, at):
+        """Mark a region (card-local px). Glow box, hand-drawn circle or neon brackets."""
+        k = self.s["mark"]
+        if k == "glow":
+            return (f'<div class="mark glowbox" id="{mid}" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px"></div>',
+                    [f'tl.fromTo("#{mid}",{{opacity:0,scale:1.25}},{{opacity:1,scale:1,duration:.3,ease:"power3.out"}},{at:.2f});'])
+        if k == "circle":
+            pw, ph = w + 60, h + 50
+            path = (f"M {pw * .52} {ph * .06} C {pw * .95} {ph * .02} {pw * 1.0} {ph * .82} {pw * .55} {ph * .95} "
+                    f"C {pw * .08} {ph * 1.02} {pw * -.02} {ph * .3} {pw * .3} {ph * .1} C {pw * .45} {ph * .03} {pw * .6} {ph * .05} {pw * .7} {ph * .1}")
+            return (f'<svg class="mark" id="{mid}" style="left:{x - 30}px;top:{y - 25}px;width:{pw}px;height:{ph}px;overflow:visible" viewBox="0 0 {pw} {ph}">'
+                    f'<path id="{mid}-p" d="{path}" fill="none" stroke="{self.s["accent"]}" stroke-width="7" stroke-linecap="round" '
+                    f'stroke-dasharray="3000" stroke-dashoffset="3000"/></svg>',
+                    [f'tl.to("#{mid}-p",{{strokeDashoffset:0,duration:.55,ease:"power2.inOut"}},{at:.2f});'])
+        corners = "".join(f'<i style="{v}:-4px;{hz}:-4px;border-{ov}:0;border-{oh}:0"></i>'
+                          for v, hz, ov, oh in (("top", "left", "bottom", "right"), ("top", "right", "bottom", "left"),
+                                                ("bottom", "left", "top", "right"), ("bottom", "right", "top", "left")))
+        return (f'<div class="mark bracket" id="{mid}" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px">{corners}</div>',
+                [f'tl.fromTo("#{mid}",{{opacity:0,scale:1.5}},{{opacity:1,scale:1,duration:.22,ease:"power4.out"}},{at:.2f});',
+                 f'tl.fromTo("#{mid}",{{opacity:.2}},{{opacity:1,duration:.06,repeat:3,yoyo:true,ease:"none"}},{at + .22:.2f});'])
+
+    def marker(self, mid, x, y, w, h, at):
+        """Text highlight sweeping left to right over a line of a page."""
+        solid = self.fam == "paper" or "marker" in self.s  # a real highlighter colour, multiplied over the text
+        col = "" if solid else f"rgba({rgb(self.s['accent2'])},.4)"
+        cls = "mark marker" if solid else "mark"
+        st = f"left:{x}px;top:{y}px;width:{w}px;height:{h}px;transform-origin:0 50%" + (f";background:{col};border-radius:4px" if col else "")
+        return (f'<div class="{cls}" id="{mid}" style="{st}"></div>',
+                [f'tl.fromTo("#{mid}",{{scaleX:0}},{{scaleX:1,duration:.45,ease:"power2.inOut"}},{at:.2f});'])
+
+    def chip(self, cid, text, x, y, at):
+        return (f'<div class="chip" id="{cid}" style="left:{x}px;top:{y}px">{E(text)}</div>',
+                [f'tl.fromTo("#{cid}",{{opacity:0,scale:.5}},{{opacity:1,scale:1,duration:.3,ease:"back.out(2)"}},{at:.2f});'])
+
+    def stat(self, sid, num, suffix, label, x, y, at, frm=0, w=420):
+        """Number that counts up. roll = big gold condensed; sticker = rotated circle; mono = glowing terminal number."""
+        k, a, a2 = self.s["stat"], self.s["accent"], self.s["accent2"]
+        if k == "roll":
+            box = (f'<div class="stat" id="{sid}" style="left:{x}px;top:{y}px;width:{w}px;padding:26px 0 22px;border-radius:24px;'
+                   f'background:{self.s.get("stat_bg", "rgba(4,20,12,.88)")};border:2px solid {a2};box-shadow:0 0 50px rgba({rgb(a2)},.35),0 30px 70px rgba(0,0,0,.35)">'
+                   f'<b id="{sid}-n" style="display:block;font:{self.s.get("head_w", "400")} {self.s.get("stat_size", 150)}px/1 {self.s["head"]};color:{self.s.get("stat_num", a2)}">{frm}{suffix}</b>'
+                   f'<span style="display:block;font:700 30px/1.2 {self.s["kicker"]};letter-spacing:3px;text-transform:uppercase;color:{self.s.get("stat_label", "#e9f5ee")}">{E(label)}</span></div>')
+            pop = f'tl.fromTo("#{sid}",{{opacity:0,scale:.6,y:40}},{{opacity:1,scale:1,y:0,duration:.4,ease:"back.out(1.8)"}},{at:.2f});'
+        elif k == "sticker":
+            box = (f'<div class="stat" id="{sid}" style="left:{x}px;top:{y}px;width:{w}px;height:{w}px;border-radius:50%;background:{a2};border:5px solid #141414;'
+                   f'display:flex;flex-direction:column;align-items:center;justify-content:center;box-shadow:0 20px 40px rgba(120,30,0,.3)">'
+                   f'<b id="{sid}-n" style="display:block;font:{self.s.get("num_font", "italic 600")} {int(w * .36)}px/1 {self.s.get("kw_font", GARAMOND)};color:#141414">{frm}{suffix}</b>'
+                   f'<span style="display:block;font:900 {int(w * .075)}px/1.15 Inter;color:#141414;max-width:{int(w * .7)}px">{E(label)}</span></div>')
+            pop = (f'tl.fromTo("#{sid}",{{opacity:0,scale:0,rotation:-40}},{{opacity:1,scale:1,rotation:-8,duration:.5,ease:"back.out(2.2)"}},{at:.2f});')
+        else:
+            box = (f'<div class="stat" id="{sid}" style="left:{x}px;top:{y}px;width:{w}px;padding:24px 0 20px;border-radius:12px;'
+                   f'background:{self.s.get("stat_bg", "rgba(10,8,24,.92)")};border:2px solid {a};box-shadow:0 0 40px rgba({rgb(a)},.5)">'
+                   f'<b id="{sid}-n" style="display:block;font:700 112px/1 \'Space Mono\';color:{a2};text-shadow:0 0 24px rgba({rgb(a2)},.8)">{frm}{suffix}</b>'
+                   f'<span style="display:block;font:700 26px/1.2 \'Space Mono\';letter-spacing:2px;color:{self.s.get("muted")};text-transform:uppercase">{E(label)}</span></div>')
+            pop = f'tl.fromTo("#{sid}",{{opacity:0,scaleY:.05}},{{opacity:1,scaleY:1,duration:.25,ease:"power4.out"}},{at:.2f});'
+        js = [pop, f'(()=>{{const o={{v:{frm}}};const el=document.querySelector("#{sid}-n");'
+                   f'tl.to(o,{{v:{num},duration:.9,ease:"power2.out",onUpdate:()=>{{el.textContent=o.v.toFixed({0 if float(num).is_integer() else 1})+"{suffix}"}}}},{at + .1:.2f});}})();']
+        return box, js
+
+    def terminal(self, tid, x, y, w, h, title, lines, at, cps=26):
+        """Typed terminal. lines: [(text, delay_after_previous)], '> ' lines get the prompt colour."""
+        dots = "".join(f'<span class="dot" style="background:{c}"></span>' for c in ("#FF5F57", "#FEBC2E", "#28C840"))
+        body = (f'<div class="term" id="{tid}" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px">'
+                f'<div class="chrome" style="background:rgba(255,255,255,.05)">{dots}<div class="url" style="background:transparent;color:#9a9a9a">{E(title)}</div></div><pre>')
+        js, t = [], at
+        for i, (text, gap) in enumerate(lines):
+            t += gap
+            cls = ' class="p"' if text.startswith(">") else ""
+            body += f'<div id="{tid}-l{i}"{cls} style="clip-path:inset(0 100% 0 0)">{E(text)}</div>'
+            d = max(.15, len(text) / cps) if text.startswith(">") else .12
+            js.append(f'tl.fromTo("#{tid}-l{i}",{{clipPath:"inset(0 100% 0 0)"}},{{clipPath:"inset(0 0% 0 0)",duration:{d:.2f},ease:"steps({max(4, len(text))})"}},{t:.2f});')
+            t += d
+        return body + "</pre></div>", js
+
+    def sticker(self, sid, text, x, y, at, rot=-6):
+        return (f'<div class="sticker" id="{sid}" style="left:{x}px;top:{y}px">{E(text)}</div>',
+                [f'tl.fromTo("#{sid}",{{opacity:0,scale:0,rotation:{rot - 30}}},{{opacity:1,scale:1,rotation:{rot},duration:.45,ease:"back.out(2.5)"}},{at:.2f});'])
+
+    def logo_tile(self, tid, x, y, w, h, src, label, at, rot=0, ghost=False):
+        """App-icon tile: real brand logo, optional name under it. Pops in on the spoken word, then breathes slowly."""
+        size = int(min(w, h) * (.5 if label else .66))
+        name = f"<b>{E(label)}</b>" if label else ""
+        if ghost:  # waits faded and grey from the scene start, comes alive on the spoken word
+            return (f'<div class="ltile" id="{tid}" style="left:{x:.0f}px;top:{y:.0f}px;width:{w:.0f}px;height:{h:.0f}px">'
+                    f'<img src="assets/logos/{src}" style="width:{size}px;height:{size}px">{name}</div>',
+                    [f'tl.fromTo("#{tid}",{{opacity:0,scale:.9}},{{opacity:.28,scale:.94,filter:"grayscale(1)",duration:.3,ease:"power2.out"}},.02);',
+                     f'tl.to("#{tid}",{{opacity:1,scale:1,filter:"grayscale(0)",duration:.4,ease:"back.out(2.4)"}},{max(.32, at):.2f});',
+                     f'tl.to("#{tid}",{{scale:1.03,duration:2.4,ease:"sine.inOut"}},{max(.32, at) + .4:.2f});'])
+        return (f'<div class="ltile" id="{tid}" style="left:{x:.0f}px;top:{y:.0f}px;width:{w:.0f}px;height:{h:.0f}px">'
+                f'<img src="assets/logos/{src}" style="width:{size}px;height:{size}px">{name}</div>',
+                [f'tl.fromTo("#{tid}",{{opacity:0,scale:.4,y:30,rotation:{rot - 10}}},{{opacity:1,scale:1,y:0,rotation:{rot},duration:.45,ease:"back.out(2)"}},{at:.2f});',
+                 f'tl.to("#{tid}",{{scale:1.04,duration:2.4,ease:"sine.inOut"}},{at + .45:.2f});'])
+
+    def photo(self, sid, x, y, w, h, img):
+        """A real image in the template's card frame, filling it."""
+        return (f'<div class="card" id="{sid}-card" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px">'
+                f'<img id="{sid}-img" src="assets/img/{img}" style="position:absolute;left:0;top:0;width:{w}px;height:{h}px;object-fit:cover;max-width:none"></div>')
+
+    def clip_card(self, sid, x, y, w, h, src, dur):
+        """A stock B-roll video playing in the template's card frame, filling it."""
+        return (f'<div class="card" id="{sid}-card" style="left:{x}px;top:{y}px;width:{w}px;height:{h}px;overflow:hidden">'
+                f'<video id="{sid}-img" class="clip" src="assets/broll/{src}" data-start="0" data-duration="{dur:.2f}" data-track-index="2" muted playsinline '
+                f'style="position:absolute;left:0;top:0;width:{w}px;height:{h}px;object-fit:cover;max-width:none"></video></div>')
+
+    def cursor(self, sid, x0, y0, x1, y1, at, move=.6):
+        svg = ('<svg viewBox="0 0 24 24"><path d="M4 2 L4 19 L8.5 15 L11.5 22 L14.5 20.7 L11.6 14 L18 14 Z" fill="#111" stroke="#fff" '
+               'stroke-width="1.6" stroke-linejoin="round"/></svg>')
+        return (f'<div class="cursor" id="{sid}-cur">{svg}</div><div class="ripple" id="{sid}-rip"></div>',
+                [f'tl.fromTo("#{sid}-cur",{{x:{x0},y:{y0},opacity:0}},{{opacity:1,duration:.15}},{at:.2f});',
+                 f'tl.to("#{sid}-cur",{{x:{x1},y:{y1},duration:{move},ease:"power2.inOut"}},{at + .1:.2f});',
+                 f'tl.to("#{sid}-cur",{{scale:.82,duration:.08,yoyo:true,repeat:1,ease:"power1.inOut"}},{at + .1 + move:.2f});',
+                 f'tl.fromTo("#{sid}-rip",{{x:{x1 - 30},y:{y1 - 30},scale:.3,opacity:1}},{{scale:1.5,opacity:0,duration:.5,ease:"power2.out"}},{at + .12 + move:.2f});'])
+
+    def cta(self, sid, word, at):
+        s, a, a2 = self.s, self.s["accent"], self.s["accent2"]
+        if self.fam == "cinema":
+            big = (f"font:{s.get('head_w', '400')} {s.get('cta_size', 230)}px/1 {s['head']};color:{s.get('cta_col', a2)};"
+                   f"text-shadow:0 0 60px rgba({rgb(a2)},.55)")
+            small = f"font:700 44px/1 {s['kicker']};letter-spacing:10px;color:{s.get('cta_small', '#fff')}"
+        elif self.fam == "paper":
+            big = (f"font:{s.get('num_font', 'italic 600')} {s.get('cta_size', 200)}px/1 {s.get('kw_font', chr(39) + 'EB Garamond' + chr(39))};"
+                   f"color:#fff;background:{a};padding:0 40px 20px;border-radius:10px;display:inline-block")
+            small = f"font:900 46px/1 Inter;color:#141414;background:{s.get('marker', '#FFE14D')};padding:10px 22px;display:inline-block;transform:rotate(-3deg)"
+        else:
+            big = f"font:900 170px/1 Montserrat;color:#fff;text-shadow:0 0 30px {a},0 0 80px {a2};letter-spacing:-4px"
+            small = f"font:700 40px/1 'Space Mono';letter-spacing:6px;color:{a2}"
+        big, small = s.get("cta_big", big), s.get("cta_small", small)
+        # long words shrink so the quoted word always fits the 1080 frame
+        fit = int(900 / ((len(word) + 2) * .74))
+        big = re.sub(r"(\d+)px/1", lambda m: f"{min(int(m.group(1)), fit)}px/1", big.replace("{size}", "170"), count=1)
+        body = (f'<div class="cta" style="top:1280px"><div id="{sid}-s" style="{small}">COMMENT</div>'
+                f'<div id="{sid}-w" style="margin-top:{40 if self.fam == "paper" else 18}px"><span style="{big}">“{E(word)}”</span></div></div>')
+        js = [f'tl.fromTo("#{sid}-s",{{opacity:0,y:20}},{{opacity:1,y:0,duration:.3,ease:"power2.out"}},{at:.2f});',
+              f'tl.fromTo("#{sid}-w",{{opacity:0,scale:2.2}},{{opacity:1,scale:1,duration:.45,ease:"expo.out"}},{at + .15:.2f});',
+              f'tl.to("#{sid}-w",{{scale:1.06,duration:.5,yoyo:true,repeat:5,ease:"sine.inOut"}},{at + .7:.2f});']
+        if self.fam == "paper":  # paper confetti, seeded
+            import random
+            rng = random.Random(7)
+            for i in range(26):
+                c = rng.choice([a, a2, "#141414", s.get("doodle2", "#2B6CFF")])
+                x, y0 = rng.randint(80, 1000), rng.randint(-200, -40)
+                body += f'<div id="{sid}-c{i}" style="position:absolute;left:{x}px;top:{y0}px;width:{rng.randint(14, 24)}px;height:{rng.randint(22, 34)}px;background:{c};border-radius:3px"></div>'
+                js.append(f'tl.fromTo("#{sid}-c{i}",{{y:0,rotation:0}},{{y:{rng.randint(1500, 2100)},rotation:{rng.randint(-540, 540)},x:{rng.randint(-120, 120)},duration:{rng.uniform(1.6, 2.6):.2f},ease:"power1.in"}},{at + .2 + rng.uniform(0, .5):.2f});')
+        return body, js
+
+    # ------------------------------------------------------------ captions
+    def captions(self, keywords, skip=()):
+        s = self.s
+        groups, cur = [], []
+        words = self.words
+        maxw = 2 if self.fam == "cinema" else 3
+        for i, (w, st, en) in enumerate(words):
+            cur.append((w, st, en))
+            nxt = words[i + 1][1] if i + 1 < len(words) else en + 1
+            cross = any(st < sc["start"] <= nxt for sc in self.scenes)
+            if len(cur) == maxw or w.endswith((".", "?", ",", "!")) or nxt - en > .22 or cross:
+                groups.append(cur)
+                cur = []
+        if cur:
+            groups.append(cur)
+        groups = [g for g in groups if not any(a <= g[0][1] < b for a, b in skip)]
+        body, js = [], []
+        for gi, g in enumerate(groups):
+            gs = g[0][1]
+            ge = groups[gi + 1][0][1] if gi + 1 < len(groups) else g[-1][2] + .3
+            mode = self.mode_at(gs + .01)
+            alt = self.alt_at(gs + .01)
+            y = {"card": 804, "full": 1310, "hidden": 1250}[mode]
+            size = s["cap_size"][{"card": 0, "full": 1, "hidden": 2}[mode]]
+            on_light = s["light"] and mode == "card" and not alt and LAYOUT == 2
+            col = s["ink"] if on_light else "#FFFFFF"
+            shadow = "none" if on_light else "0 4px 24px rgba(0,0,0,.55),0 2px 4px rgba(0,0,0,.4)"
+            spans = []
+            for wi, (w, st, en) in enumerate(g):
+                txt = w.rstrip(".,!") if not w.endswith("?") else w
+                kw = re.sub(r"[^a-z0-9]", "", txt.lower()) in keywords
+                sid = f"c{gi}w{wi}"
+                css = ""
+                if kw and s["cap_mode"] == "pop":
+                    css = f"color:{s['kw_col']}"
+                elif kw and s["cap_mode"] == "marker":
+                    mk = s.get("marker", "#FFE14D")
+                    css = (f"font-family:{s.get('kw_font', chr(39) + 'EB Garamond' + chr(39))};font-style:{s.get('kw_style', 'italic')};"
+                           f"font-weight:{s.get('kw_w', 600)};font-size:{int(size * s.get('kw_scale', 1.18))}px;letter-spacing:0;"
+                           f"color:{'#141414' if on_light else '#FFFFFF'};padding:0 10px;background:linear-gradient({mk},{mk}) no-repeat 0 82%/0% 62%")
+                elif kw and s["cap_mode"] == "karaoke":
+                    css = f"color:{s['kw_col']}"
+                spans.append(f'<span class="cw" id="{sid}" style="{css}">{E(txt)}</span>')
+                if s["cap_mode"] == "pop":
+                    js.append(f'tl.fromTo("#{sid}",{{opacity:0,scale:1.5}},{{opacity:1,scale:1,duration:.14,ease:"power3.out"}},{st:.2f});')
+                elif s["cap_mode"] == "marker":
+                    js.append(f'tl.fromTo("#{sid}",{{opacity:0,y:18}},{{opacity:1,y:0,duration:.16,ease:"back.out(2)"}},{st:.2f});')
+                    if kw:
+                        js.append(f'tl.to("#{sid}",{{backgroundSize:"100% 62%",color:"#141414",textShadow:"none",duration:.25,ease:"power2.out"}},{st + .05:.2f});')
+                else:
+                    nx = g[wi + 1][1] if wi + 1 < len(g) else ge
+                    js.append(f'tl.fromTo("#{sid}",{{opacity:0}},{{opacity:1,duration:.06}},{st:.2f});')
+                    js.append(f'tl.fromTo("#{sid}",{{backgroundColor:"rgba({rgb(s["accent"])},0)"}},{{backgroundColor:"rgba({rgb(s["accent"])},1)",duration:.06}},{st:.2f});')
+                    js.append(f'tl.to("#{sid}",{{backgroundColor:"rgba({rgb(s["accent"])},0)",duration:.06}},{max(st + .07, nx - .03):.2f});')
+            body.append(f'<div class="cg clip" id="cg{gi}" data-start="{gs:.2f}" data-duration="{ge - gs:.2f}" data-track-index="{gi % 2}" '
+                        f'style="top:{y}px;font-size:{size}px;color:{col};text-shadow:{shadow}">{" ".join(spans)}</div>')
+        doc = f"""<template>
+<style>
+#root{{position:absolute;inset:0;overflow:hidden}}
+.cg{{position:absolute;left:50px;right:50px;text-align:center;font-family:{s['cap']};font-weight:{s['cap_w']};letter-spacing:{s['cap_ls']};
+  text-transform:{s['cap_case']};line-height:1.08}}
+.cw{{display:inline-block;margin:0 8px;{'padding:0 14px;border-radius:12px' if s['cap_mode'] == 'karaoke' else ''}}}
+</style>
+<div id="root" data-composition-id="captions" data-width="{W}" data-height="{H}">
+{chr(10).join(body)}
+</div>
+<script>
+const tl = gsap.timeline({{ paused: true }});
+{chr(10).join(js)}
+window.__timelines["captions"] = tl;
+</script>
+</template>
+"""
+        open(f"{self.out}/compositions/captions.html", "w").write(doc)
+
+    def mode_at(self, t):
+        for sc in self.scenes:
+            if sc["start"] <= t < sc["end"]:
+                return sc["face"]
+        return "card"
+
+    def alt_at(self, t):
+        return any(s <= t < e for _, s, e, _ in self.alts)
+
+    # ------------------------------------------------------------ root
+    def write_root(self, music, music_vol=.14):
+        s, D = self.s, self.dur
+        rig, prev = [], None
+        for sc in self.scenes:
+            m, at = sc["face"], sc["start"]
+            if m == prev:
+                continue
+            on = MASK if m == "card" else "none"  # soft edges only while the clip sits under a card
+            rig.append(f'tl.set("#facecam",{{maskImage:"{on}",webkitMaskImage:"{on}"}},{at:.2f});')
+            if at == 0:
+                st = {"card": (CARD_Y, CARD_S, 0, 1), "full": (FULL_Y, FULL_S, 500, 0), "hidden": (1980, CARD_S, 600, 0)}[m]
+                rig.append(f'gsap.set("#facecam",{{y:{st[0]},scale:{st[1]}}});')
+            elif m == "card":
+                rig += [f'tl.to("#facecam",{{y:{CARD_Y},scale:{CARD_S},x:0,duration:.42,ease:"power3.inOut"}},{at:.2f});']
+            elif m == "full":
+                rig += [f'tl.to("#facecam",{{y:{FULL_Y},scale:{FULL_S},duration:.42,ease:"power3.inOut"}},{at:.2f});']
+                if self.fam == "cinema":  # punch-in shake
+                    rig.append(f'tl.fromTo("#facewrap",{{x:-16}},{{x:0,duration:.34,ease:"elastic.out(1.2,.3)"}},{at + .36:.2f});')
+            else:
+                rig += [f'tl.to("#facecam",{{y:1980,scale:{CARD_S},duration:.36,ease:"power2.in"}},{at:.2f});']
+            prev = m
+        runs = []  # slow push-in over each unbroken stretch of full-face scenes
+        for sc in self.scenes:
+            if sc["face"] == "full" and runs and abs(runs[-1][1] - sc["start"]) < .01:
+                runs[-1][1] = sc["end"]
+            elif sc["face"] == "full":
+                runs.append([sc["start"], sc["end"]])
+        for st, en in runs:
+            rig.append(f'tl.to("#facecam",{{scale:{FULL_S + .05},duration:{en - st - .46:.2f},ease:"none"}},{st + .44:.2f});')
+        if self.fam == "cinema":
+            rig.insert(0, 'gsap.set("#facewrap",{x:0});')
+
+        bg, extra = self.background(rig)
+        alts = []
+        for i, (sid, st, en, img) in enumerate(self.alts):
+            if self.fam == "paper":
+                inner = (f'<div style="position:absolute;inset:0;background:{s["alt_color"]}"></div>'
+                         f'<div style="position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.16) 1.6px,transparent 1.8px);background-size:36px 36px"></div>')
+                rig.append(f'tl.fromTo("#alt{i}",{{clipPath:"inset(100% 0 0 0)"}},{{clipPath:"inset(0% 0 0 0)",duration:.4,ease:"power3.inOut"}},{st:.2f});')
+            else:
+                inner = (f'<img id="alti{i}" src="assets/img/{img}" style="position:absolute;left:-60px;top:-60px;width:1200px;height:2040px;object-fit:cover">'
+                         f'<div style="position:absolute;inset:0;background:{s["alt_tint"]}"></div>'
+                         f'<div style="position:absolute;inset:0;background:radial-gradient(ellipse 80% 60% at 50% 40%,rgba(0,0,0,0),rgba(0,0,0,.6))"></div>')
+                rig.append(f'tl.fromTo("#alti{i}",{{opacity:0,scale:1.1}},{{opacity:1,scale:1,duration:.4,ease:"power2.out"}},{st:.2f});')
+                rig.append(f'tl.to("#alti{i}",{{x:-40,duration:{en - st - .4:.2f},ease:"none"}},{st + .4:.2f});')
+            alts.append(f'<div id="alt{i}" class="clip" data-start="{st:.2f}" data-duration="{en - st:.2f}" data-track-index="{2 + i % 2}" '
+                        f'style="position:absolute;inset:0;z-index:2">{inner}</div>')
+
+        # section transitions
+        trans = []
+        for i, at in enumerate(self.sections):
+            at = max(0, at - .08)
+            if s["section"] == "flash":
+                trans.append(f'<div id="tr{i}" class="clip" data-layout-allow-occlusion data-start="{at:.2f}" data-duration=".5" data-track-index="{50 + i % 2}" style="position:absolute;inset:0;z-index:28;background:#fff;opacity:0"></div>')
+                rig.append(f'tl.fromTo("#tr{i}",{{opacity:.85}},{{opacity:0,duration:.42,ease:"power2.out"}},{at:.2f});')
+            elif s["section"] == "wipe":
+                trans.append(f'<div id="tr{i}" class="clip" data-layout-allow-occlusion data-start="{at - .2:.2f}" data-duration=".62" data-track-index="{50 + i % 2}" style="position:absolute;inset:0;z-index:28;background:{s["accent"]}"></div>')
+                rig.append(f'tl.fromTo("#tr{i}",{{clipPath:"inset(0 100% 0 0)"}},{{clipPath:"inset(0 0% 0 0)",duration:.24,ease:"power3.in"}},{at - .2:.2f});')
+                rig.append(f'tl.to("#tr{i}",{{clipPath:"inset(0 0 0 100%)",duration:.3,ease:"power3.out"}},{at + .06:.2f});')
+            else:
+                bars = "".join(f'<div style="position:absolute;left:0;right:0;top:{y}px;height:{h}px;background:{c};mix-blend-mode:screen"></div>'
+                               for y, h, c in ((240, 60, "#ff2bd6"), (700, 26, "#22D3EE"), (1180, 90, "#a78bfa"), (1560, 30, "#22D3EE")))
+                trans.append(f'<div id="tr{i}" class="clip" data-layout-allow-occlusion data-start="{at:.2f}" data-duration=".34" data-track-index="{50 + i % 2}" style="position:absolute;inset:0;z-index:28;opacity:.8">{bars}</div>')
+                rig.append(f'tl.fromTo("#tr{i}",{{x:-80}},{{x:80,duration:.3,ease:"steps(4)"}},{at:.2f});')
+        hosts = [f'<div id="h-{sc["id"]}" data-composition-id="{sc["id"]}" data-composition-src="compositions/{sc["id"]}.html" '
+                 f'data-start="{sc["start"]:.2f}" data-duration="{sc["end"] - sc["start"]:.2f}" data-track-index="{20 + i % 2}" '
+                 f'data-track-kind="graphics" data-width="{W}" data-height="{H}" style="z-index:20"></div>' for i, sc in enumerate(self.scenes)]
+        audio = [f'<audio id="voice" class="clip" src="assets/voice.wav" data-start="0" data-duration="{D}" data-track-index="40" data-volume="1"></audio>',
+                 f'<audio id="music" class="clip" src="assets/{music}" data-start="0" data-duration="{D}" data-track-index="41" data-volume="{music_vol}"></audio>']
+        for n, (name, at, vol, du) in enumerate(self.sfx):
+            audio.append(f'<audio id="fx{n}" class="clip" src="assets/sfx/{name}.mp3" data-start="{at:.2f}" data-duration="{min(du, D - at):.2f}" '
+                         f'data-track-index="{42 + n % 6}" data-volume="{vol}"></audio>')
+        if s["progress"]:
+            extra += f'<div id="prog" style="position:absolute;left:0;top:0;width:{W}px;height:8px;z-index:29;background:linear-gradient(90deg,{s["accent"]},{s["accent2"]});transform-origin:0 50%;box-shadow:0 0 16px {s["accent2"]}"></div>'
+            rig.append(f'tl.fromTo("#prog",{{scaleX:0}},{{scaleX:1,duration:{D:.2f},ease:"none"}},0);')
+        chair_inner = ""
+        if self.fam == "paper":
+            chair_inner = ('<div style="position:absolute;left:50%;top:-22px;width:200px;height:48px;margin-left:-100px;'
+                           'background:rgba(255,225,77,.8)"></div>')
+        doc = f"""<!doctype html>
+<html lang="en" data-resolution="portrait">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width={W}, height={H}" />
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+html,body{{width:{W}px;height:{H}px;overflow:hidden;background:{s['base2']}}}
+#root{{position:relative;width:{W}px;height:{H}px;overflow:hidden}}
+#grain{{position:absolute;inset:0;z-index:30;opacity:{s['grain']};mix-blend-mode:{'multiply' if s['light'] else 'overlay'};pointer-events:none}}
+#chair{{position:absolute;left:36px;right:36px;top:{CHAIR_TOP}px;height:900px;z-index:8;border-radius:{'10px' if self.fam == 'paper' else '56px'};
+  background:{s['chair_bg']};border:{s['chair_border']};box-shadow:0 30px 80px rgba(0,0,0,.25)}}
+#facewrap{{position:absolute;inset:0;z-index:9}}
+#facecam{{position:absolute;left:0;top:0;width:{W}px;height:{H}px;transform-origin:50% 0%;overflow:hidden;mask-composite:intersect;-webkit-mask-composite:source-in}}
+#face{{position:absolute;left:0;top:0;width:{W}px;height:{H}px;object-fit:cover}}
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="main" data-start="0" data-duration="{D}" data-width="{W}" data-height="{H}">
+{bg}
+{('<video id="faceblur" class="clip" src="assets/face_blur.mp4" data-start="0" data-duration="' + str(D) + '" data-track-index="4" muted playsinline data-layout-allow-occlusion style="position:absolute;left:0;top:0;width:1080px;height:1920px;object-fit:cover;z-index:1"></video>') if LAYOUT == 1 else ''}
+{chr(10).join(alts)}
+<div id="facewrap" data-layout-allow-overflow><div id="facecam">
+<video id="face" class="clip" src="assets/face.mp4" data-start="0" data-duration="{D}" data-track-index="5" muted playsinline data-layout-allow-occlusion></video>
+</div></div>
+{chr(10).join(hosts)}
+<div id="h-captions" data-composition-id="captions" data-composition-src="compositions/captions.html" data-start="0" data-duration="{D}" data-track-index="30" data-track-kind="captions" data-width="{W}" data-height="{H}" style="z-index:25"></div>
+{chr(10).join(trans)}
+{extra}
+<svg id="grain" width="{W}" height="{H}" data-layout-ignore><filter id="nz"><feTurbulence type="fractalNoise" baseFrequency=".85" numOctaves="2" seed="11"/><feColorMatrix type="saturate" values="0"/></filter><rect width="100%" height="100%" filter="url(#nz)"/></svg>
+{chr(10).join(audio)}
+</div>
+<script>
+const tl = gsap.timeline({{ paused: true }});
+{chr(10).join(rig)}
+window.__timelines["main"] = tl;
+</script>
+</body>
+</html>
+"""
+        open(f"{self.out}/index.html", "w").write(doc)
+        json.dump({"$schema": "https://hyperframes.heygen.com/schema/hyperframes.json",
+                   "paths": {"blocks": "compositions", "components": "compositions/components", "assets": "assets"},
+                   "media": {"autoProxy": True}, "authoringSkill": "hyperframes"}, open(f"{self.out}/hyperframes.json", "w"), indent=2)
+
+    def background(self, rig):
+        """Returns (markup under everything, markup over the scenes) and adds its motion to rig."""
+        s, D = self.s, self.dur
+        if s["bg"] == "mesh":
+            blobs = "".join(f'<div id="b{i}" style="position:absolute;left:{x}px;top:{y}px;width:{r}px;height:{r}px;border-radius:50%;'
+                            f'background:radial-gradient(circle,{c},rgba(0,0,0,0) 68%)"></div>'
+                            for i, (x, y, r, c) in enumerate(((-300, -200, 1200, s["glow1"]), (380, 700, 1100, s["glow2"]), (-200, 1200, 1100, s["glow3"]))))
+            for i, (dx, dy) in enumerate(((260, 340), (-300, -260), (240, -300))):
+                rig.append(f'tl.to("#b{i}",{{x:{dx},y:{dy},duration:{D:.2f},ease:"sine.inOut"}},0);')
+            return (f'<div style="position:absolute;inset:0;background:linear-gradient(180deg,{s["base1"]},{s["base2"]})"></div>{blobs}'
+                    f'<div style="position:absolute;inset:0;background:radial-gradient(ellipse 90% 70% at 50% 45%,rgba(0,0,0,0),rgba(0,0,0,{s.get("vignette", .55)}))"></div>'), ""
+        if s["bg"] == "lime":  # soft studio grey with palm leaves drifting in the top-left corner
+            leaves = "".join(f'<path d="M0 0 C 60 -40 300 -40 420 0 C 300 40 60 40 0 0 Z" fill="rgba(60,60,55,.13)" transform="rotate({r})"/>'
+                             for r in (8, 30, 52, 74))
+            rig.append(f'tl.fromTo("#leaf",{{rotation:-3}},{{rotation:3,duration:{D:.2f},ease:"sine.inOut"}},0);')
+            return (f'<div style="position:absolute;inset:0;background:linear-gradient(180deg,{s["base1"]},{s["base2"]})"></div>'
+                    f'<svg id="leaf" style="position:absolute;left:-40px;top:-30px;width:520px;height:520px;transform-origin:0 0" viewBox="0 -40 460 460">{leaves}</svg>'), ""
+        if s["bg"] == "paper":  # plain paper + its pattern, no doodles
+            return (f'<div style="position:absolute;inset:0;background:linear-gradient(180deg,{s["base1"]},{s["base2"]})"></div>'
+                    f'<div style="position:absolute;inset:0;{PATTERNS[s.get("pattern", "dots")]}"></div>'), ""
+        rig.append(f'tl.fromTo("#gridlines",{{backgroundPosition:"0px 0px"}},{{backgroundPosition:"0px {int(D * 60)}px",duration:{D:.2f},ease:"none"}},0);')
+        rig.append(f'tl.to("#g0",{{x:200,y:300,duration:{D:.2f},ease:"sine.inOut"}},0);')
+        rig.append(f'tl.to("#g1",{{x:-260,y:-200,duration:{D:.2f},ease:"sine.inOut"}},0);')
+        return (f'<div style="position:absolute;inset:0;background:linear-gradient(180deg,{s["base1"]},{s["base2"]})"></div>'
+                f'<div id="g0" style="position:absolute;left:-300px;top:-300px;width:1100px;height:1100px;border-radius:50%;background:radial-gradient(circle,{s["glow1"]},rgba(0,0,0,0) 68%)"></div>'
+                f'<div id="g1" style="position:absolute;left:300px;top:1000px;width:1100px;height:1100px;border-radius:50%;background:radial-gradient(circle,{s["glow2"]},rgba(0,0,0,0) 68%)"></div>'
+                f'<div style="position:absolute;left:-540px;right:-540px;top:1000px;height:1400px;transform:perspective(600px) rotateX(64deg);transform-origin:50% 0%">'
+                f'<div id="gridlines" style="position:absolute;inset:0;background-image:linear-gradient(rgba({rgb(s["accent"])},.55) 2px,transparent 2px),'
+                f'linear-gradient(90deg,rgba({rgb(s["accent"])},.55) 2px,transparent 2px);background-size:90px 90px;'
+                f'-webkit-mask-image:linear-gradient(180deg,rgba(0,0,0,0),#000 40%)"></div></div>'
+                f'<div style="position:absolute;inset:0;background-image:repeating-linear-gradient(0deg,rgba(255,255,255,.035) 0 2px,transparent 2px 5px)"></div>'), ""

@@ -1,0 +1,19 @@
+[Unit]
+Description=Aniket Content Agent Telegram inbox (reel link -> avatar reel)
+After=network-online.target aniket-content-agent-browser.service
+Wants=network-online.target
+ConditionPathExists=/opt/aniket-content-agent/telegram.json
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/aniket-content-agent/pipeline
+Environment=PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/root
+ExecStart=/usr/bin/python3 /opt/aniket-content-agent/pipeline/bot.py
+Restart=always
+RestartSec=5
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

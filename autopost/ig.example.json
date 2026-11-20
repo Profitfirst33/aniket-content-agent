@@ -1,0 +1,6 @@
+{
+ "token": "PASTE_LONG_LIVED_INSTAGRAM_TOKEN",
+ "ig_user_id": "PASTE_IG_USER_ID",
+ "public_dir": "/opt/aniket-content-agent/autopost/public",
+ "public_url": "https://YOUR-DOMAIN/ig-media/"
+}

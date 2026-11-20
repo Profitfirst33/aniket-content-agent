@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""Telegram inbox for the content agent.
+
+Send the bot Instagram reel links (any number, in one message or many) or a plain topic. Each link
+becomes one reel in your avatar's style: it reads the reel without logging in, follows its script,
+generates Flow clips, edits, and sends the finished reel back to the same chat (run_reel.py -> deliver.py).
+
+Only the chat saved in /opt/aniket-content-agent/telegram.json is obeyed. One reel is made at a time; the
+line is saved in queue.json, so a restart carries on where it stopped. A failed reel is retried once
+from the stage where it stopped; when Flow credits run low, or two reels in a row fail, the line pauses
+until /resume.
+Plain text without a link is not queued (use /topic <topic>).
+Commands: /status, /queue, /pause, /resume, /clear, /topic, /help (also in Telegram's "/" menu).
+"""
+import fcntl, json, os, re, subprocess, threading, time, urllib.parse, urllib.request
+
+CFG = json.load(open("/opt/aniket-content-agent/telegram.json"))
+API = f"https://api.telegram.org/bot{CFG['token']}"
+OWNER = str(CFG["chat_id"])
+P = "/opt/aniket-content-agent/pipeline"
+JOBS = "/var/lib/aniket-content-agent/jobs"
+STATE = "/var/lib/aniket-content-agent/queue.json"
+IG = re.compile(r"https?://(?:www\.)?instagram\.com/(?:[A-Za-z0-9_.]+/)?(?:p|reel|reels)/([A-Za-z0-9_-]+)")
+GAP = 30  # seconds between reels, so Instagram sees a slow, human pace
+# shown in Telegram's menu when you type "/"
+COMMANDS = [("status", "Abhi kaunsi reel ban rahi hai, kis step par"),
+            ("queue", "Line mein kaunsi reels hain, kitni bani / fail"),
+            ("pause", "Line rok do (jo ban rahi hai wo poori hogi)"),
+            ("resume", "Ruki hui line phir se chalu karo"),
+            ("clear", "Line khaali karo (jo ban rahi hai wo poori hogi)"),
+            ("topic", "Bina link ke, ek topic par reel: /topic <topic>"),
+            ("help", "Saare commands aur reel kaise bhejni hai")]
+HELP = ("Reel banwani ho to Instagram reel ka link bhejo. Ek message mein bahut saare links bhi chalenge, "
+        "har link ki alag reel banegi. Link ke saath kuch likhoge (jaise \"last mein course bolna\") to wo bhi dhyan rakhunga. "
+        "Bina link ke topic par reel chahiye to: /topic <topic>. Bina link wala normal message reel nahi banata.\n\n" + "\n".join(f"/{c} - {d}" for c, d in COMMANDS))
+
+lock = threading.Lock()
+current = {"item": None}
+
+
+def load():
+    try:
+        return json.load(open(STATE))
+    except Exception:
+        return {"items": [], "paused": False, "done": [], "failed": []}
+
+
+def save(st):
+    tmp = STATE + ".tmp"
+    json.dump(st, open(tmp, "w"), indent=1, ensure_ascii=False)
+    os.replace(tmp, STATE)
+
+
+def call(method, **params):
+    data = urllib.parse.urlencode(params).encode()
+    with urllib.request.urlopen(f"{API}/{method}", data=data, timeout=70) as r:
+        return json.loads(r.read())
+
+
+def say(text):
+    try:
+        call("sendMessage", chat_id=OWNER, text=text[:4000])
+    except Exception as e:
+        print("send failed:", e, flush=True)
+
+
+def read_reel(url):
+    r = subprocess.run(["node", f"{P}/reel_read.mjs", url], capture_output=True, text=True, timeout=120)
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def make_request(item):
+    """Turn a queue item into request.txt content. Returns (request, short description)."""
+    if not item.get("url"):
+        return f"Topic / idea from the creator: {item['note']}", item["note"][:80]
+    url = item["url"]
+    for attempt in range(2):
+        try:
+            reel = read_reel(url)
+            if reel.get("text"):
+                break
+            err = reel.get("error", "empty page")
+        except Exception as e:
+            err = str(e)
+        time.sleep(60)
+    else:
+        raise RuntimeError(f"reel read nahi ho payi ({err}). Private / deleted to nahi?")
+    req = (f"Recreate this viral Instagram reel for our avatar Aniket: the same hook, points, order and CTA, "
+           f"in his own words, in the language the reel is spoken in.\n"
+           f"Reel: {url}\nCreator: @{reel.get('author', '')}  Likes: {reel.get('likes', '')}\n"
+           f"REEL PAGE TEXT (caption):\n{reel['text']}\n")
+    if item.get("note"):
+        req += f"\nExtra instruction from the creator: {item['note']}\n"
+    return req, f"@{reel.get('author', '?')} ki reel ({reel.get('likes', '?')} likes)"
+
+
+def job_running(job):
+    """True while a run_reel.py from before a bot restart still works on this job."""
+    try:
+        f = open(f"{job}/.running", "a")
+    except FileNotFoundError:
+        return False
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        f.close()
+
+
+def run_job(job):
+    """Run (or resume) one job until it finishes; returns (returncode, tail of output)."""
+    while job_running(job):  # an orphan from before a restart: let it finish, then check its result
+        time.sleep(30)
+    if os.path.exists(f"{job}/output/.done"):
+        return 0, ""
+    r = subprocess.run(["python3", f"{P}/run_reel.py", job], capture_output=True, text=True)
+    return r.returncode, (r.stderr or r.stdout)[-1000:]
+
+
+def finish(item, ok, st):
+    st["items"] = [i for i in st["items"] if i["id"] != item["id"]]
+    (st["done"] if ok else st["failed"]).append(dict(item))
+    if ok:
+        st["fail_streak"] = 0
+    save(st)
+
+
+def failed(item, why):
+    """A reel could not be made. Two in a row usually means Flow logged out or Instagram blocks us,
+    so instead of failing the whole line: pause it and put both reels back at the front."""
+    with lock:
+        st = load()
+        streak = st.get("fail_streak", 0) + 1
+        if streak < 2:
+            finish(item, False, st)
+            st["fail_streak"] = streak
+            save(st)
+            msg = f"❌ Ye reel nahi ban payi, agli par ja raha hoon: {item.get('desc') or item.get('url') or item.get('note')}\n{why}"
+        else:
+            prev = st["failed"].pop() if st["failed"] else None
+            if prev and all(i["id"] != prev["id"] for i in st["items"]):
+                st["items"].insert(0, prev)
+            st["paused"], st["fail_streak"] = True, 0
+            save(st)
+            msg = (f"⛔ Lagatar 2 reels fail hui, isliye line rok di (koi reel chhodi nahi, dono wapas line mein hain).\n"
+                   f"Aksar wajah: Flow ka login nikal gaya ya credits / Instagram ki dikkat. "
+                   f"VPS browser mein Flow check karo, phir /resume bhejo.\n\nLast error:\n{why}")
+    say(msg)
+
+
+def worker():
+    while True:
+        with lock:
+            st = load()
+            item = None if st["paused"] or not st["items"] else st["items"][0]
+        if not item:
+            time.sleep(5)
+            continue
+        current["item"] = item
+        try:
+            if not item.get("job"):
+                req, desc = make_request(item)
+                job = f"{JOBS}/{time.strftime('%Y-%m-%d_%H%M%S')}"
+                os.makedirs(job, exist_ok=True)
+                open(f"{job}/request.txt", "w").write(req)
+                with lock:
+                    st = load()
+                    for i in st["items"]:
+                        if i["id"] == item["id"]:
+                            i["job"], i["desc"] = job, desc
+                    save(st)
+                item["job"], item["desc"] = job, desc
+                say(f"▶️ Shuru: {desc}\nLine mein baaki: {len(st['items']) - 1}. ~30-40 min.")
+            else:
+                say(f"🔁 Wapas shuru (restart ke baad): {item.get('desc', item['job'])}")
+            rc, tail = run_job(item["job"])
+            if rc not in (0, 3):
+                say(f"⚠️ Galti aayi, ek baar aur try kar raha hoon (jahan ruki thi wahi se).\n{tail[-400:]}")
+                time.sleep(60)
+                rc, tail = run_job(item["job"])
+            with lock:
+                st = load()
+                if rc == 3:
+                    st["paused"] = True
+                    save(st)
+                    say(f"⛔ Flow credits kam hain ({tail.strip()[-40:]}). Line rok di hai.\n"
+                        f"Baaki reels: {len(st['items'])}. Credits daal ke /resume bhejo, wahi se chalegi.")
+                elif rc == 0:
+                    finish(item, True, st)
+                    title = json.load(open(f"{item['job']}/script.json")).get("title", "")
+                    say(f"🎬 Done: {title}\nAaj tak bani: {len(st['done'])}. Line mein baaki: {len(st['items'])}.")
+            if rc not in (0, 3):
+                failed(item, tail[-800:])
+        except Exception as e:
+            failed(item, str(e)[-800:])
+        finally:
+            current["item"] = None
+        time.sleep(GAP)
+
+
+def add(text, topic=False):
+    """Queue every reel link in the message, or the message as a topic when sent with /topic. Returns a reply."""
+    ids = list(dict.fromkeys(IG.findall(text)))
+    if not ids and not topic:
+        # plain chat ("make this in english", a question) must not turn into a reel and burn credits
+        return ("🤔 Is message mein Instagram reel ka link nahi mila, isliye kuch nahi banaya.\n"
+                "Note ho to link ke saath usi message mein likho (jaise: <link> english mein banao).\n"
+                "Topic par reel chahiye to: /topic <topic>")
+    note = re.sub(r"https?://\S+", "", text).strip()
+    with lock:
+        st = load()
+        seen = {i.get("url") for i in st["items"]} | {d.get("url") for d in st["done"]}
+        if not ids:
+            st["items"].append({"id": f"t{time.time_ns()}", "url": None, "note": text})
+            save(st)
+            return f"📥 Topic line mein daal diya. Line mein: {len(st['items'])}."
+        new, dup = 0, 0
+        for rid in ids:
+            url = f"https://www.instagram.com/reel/{rid}/"
+            if url in seen:
+                dup += 1
+                continue
+            st["items"].append({"id": rid, "url": url, "note": note})
+            seen.add(url)
+            new += 1
+        save(st)
+        n = len(st["items"])
+    msg = f"📥 {new} reel(s) line mein daal di."
+    if dup:
+        msg += f" {dup} pehle se bani / line mein thi, chhod di."
+    msg += f"\nLine mein total: {n} (~{n * 35 // 60} ghante, ~{n * 60} credits)."
+    if st["paused"]:
+        msg += "\n⏸ Line ruki hai, /resume bhejo."
+    return msg
+
+
+def status():
+    item = current["item"]
+    if not item or not item.get("job"):
+        st = load()
+        return "⏸ Line ruki hai. /resume bhejo." if st["paused"] else ("⏳ Shuru ho rahi hai..." if item else "Abhi koi reel nahi ban rahi. Reel link bhejo.")
+    try:
+        lines = open(f"{item['job']}/log.txt").read().strip().splitlines()
+        stage = [l for l in lines if "==" in l][-1].split("==")[-1].strip()
+        return f"⏳ Ban rahi hai: {item.get('desc', '')}\nStage: {stage}\nLast: {lines[-1][:200]}\nLine mein: {len(load()['items'])}"
+    except Exception:
+        return "⏳ Shuru ho rahi hai..."
+
+
+def show_queue():
+    st = load()
+    if not st["items"]:
+        return f"Line khaali hai. Bani: {len(st['done'])}, fail: {len(st['failed'])}."
+    rows = [f"{k + 1}. {i.get('desc') or i.get('url') or i['note'][:40]}" for k, i in enumerate(st["items"][:20])]
+    more = f"\n... aur {len(st['items']) - 20}" if len(st["items"]) > 20 else ""
+    head = "⏸ RUKI HUI\n" if st["paused"] else ""
+    return head + "\n".join(rows) + more + f"\n\nBani: {len(st['done'])}, fail: {len(st['failed'])}."
+
+
+def set_paused(v):
+    with lock:
+        st = load()
+        st["paused"] = v
+        save(st)
+
+
+def clear():
+    with lock:
+        st = load()
+        busy = current["item"]["id"] if current["item"] else None
+        n = len([i for i in st["items"] if i["id"] != busy])
+        st["items"] = [i for i in st["items"] if i["id"] == busy]
+        save(st)
+    return f"🗑 {n} reel(s) line se hata di." + (" Jo abhi ban rahi hai wo poori hogi." if busy else "")
+
+
+def main():
+    if not os.path.exists(STATE):
+        save(load())
+    try:
+        call("setMyCommands", commands=json.dumps([{"command": c, "description": d} for c, d in COMMANDS]))
+    except Exception as e:
+        print("setMyCommands failed:", e, flush=True)
+    threading.Thread(target=worker, daemon=True).start()
+    offset = None
+    print("bot running", flush=True)
+    while True:
+        try:
+            params = {"timeout": 50}
+            if offset:
+                params["offset"] = offset
+            for u in call("getUpdates", **params).get("result", []):
+                offset = u["update_id"] + 1
+                msg = u.get("message") or {}
+                if str(msg.get("chat", {}).get("id")) != OWNER:
+                    continue
+                text = (msg.get("text") or msg.get("caption") or "").strip()
+                # in a group, commands arrive as /status@BotName
+                text = re.sub(r"^(/\w+)@\w+", r"\1", text)
+                if not text or text.startswith("/start") or text.startswith("/help"):
+                    say(HELP)
+                elif text.startswith("/status"):
+                    say(status())
+                elif text.startswith("/queue"):
+                    say(show_queue())
+                elif text.startswith("/pause"):
+                    set_paused(True)
+                    say("⏸ Line rok di. Jo reel abhi ban rahi hai wo poori hogi. /resume se chalu.")
+                elif text.startswith("/resume"):
+                    set_paused(False)
+                    say(f"▶️ Line chalu. Baaki: {len(load()['items'])}.")
+                elif text.startswith("/clear"):
+                    say(clear())
+                elif text.startswith("/topic"):
+                    t = text[len("/topic"):].strip()
+                    say(add(t, topic=True) if t else "Topic bhi likho, jaise: /topic Claude se Excel automate karna")
+                elif text.startswith("/"):
+                    say(HELP)
+                else:
+                    # in a group, members' normal chat (no reel link) is ignored silently
+                    if msg.get("chat", {}).get("type") != "private" and not IG.search(text):
+                        continue
+                    say(add(text))
+        except Exception as e:
+            print("poll error:", e, flush=True)
+            time.sleep(5)
+
+
+if __name__ == "__main__":
+    main()

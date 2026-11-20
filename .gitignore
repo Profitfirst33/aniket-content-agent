@@ -1,0 +1,13 @@
+# secrets — never commit
+telegram.json
+autopost/ig.json
+.env
+.env.*
+
+# installed / generated
+venv/
+node_modules/
+__pycache__/
+*.pyc
+*.log
+autopost/public/

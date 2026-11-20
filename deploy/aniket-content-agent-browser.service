@@ -1,0 +1,19 @@
+[Unit]
+Description=Aniket Content Agent browser (Instagram research + Google Flow)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aniket-agent
+Group=aniket-agent
+WorkingDirectory=/var/lib/aniket-content-agent
+ExecStart=/opt/aniket-content-agent/start-browser.sh
+Restart=always
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+{
+  "project": "Nov 02 - 16:50",
+  "avatar_ingredient": "Image of Aniket at his desk with two monitors",
+  "mode": "Video",
+  "reference_mode": "Ingredients",
+  "model": "Omni 1.1 Flash",
+  "aspect_ratio": "9:16",
+  "resolution": "720p",
+  "length_seconds": 8,
+  "outputs": 1,
+  "max_credits_per_clip": 150,
+  "rule": "Always use Omni 1.1 Flash. If Omni is not offered, stop and report; do not switch to Veo."
+}
